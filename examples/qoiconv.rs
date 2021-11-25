@@ -1,6 +1,10 @@
 use png::{BitDepth, ColorType};
-use qoi_rs::{ChannelCount, write_to_file};
-use std::{fs::File, io::Result, path::{Path, PathBuf}};
+use qoi_rs::{write_to_file, ChannelCount};
+use std::{
+    fs::File,
+    io::Result,
+    path::{Path, PathBuf},
+};
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -12,9 +16,7 @@ fn main() -> Result<()> {
     let dest_ext = dest.extension().and_then(|e| e.to_str());
 
     match (source_ext, dest_ext) {
-        (Some("png"), Some("qoi")) => {
-            png_to_qoi(source, dest)
-        },
+        (Some("png"), Some("qoi")) => png_to_qoi(source, dest),
         (Some("qoi"), Some("png")) => {
             todo!("QOI decoding")
         }
@@ -36,7 +38,10 @@ fn png_to_qoi(source: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
     let channels = match info.color_type {
         ColorType::Rgb => ChannelCount::Rgb,
         ColorType::Rgba => ChannelCount::Rgba,
-        other => panic!("Unsupported color type {:?}, supports only RGB, RGBA", other),
+        other => panic!(
+            "Unsupported color type {:?}, supports only RGB, RGBA",
+            other
+        ),
     };
 
     write_to_file(dest, bytes, info.width as _, channels)

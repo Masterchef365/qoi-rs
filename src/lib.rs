@@ -96,8 +96,7 @@ pub fn encode<W: Write + Seek>(
             } else {
                 // Write a long run length
                 run -= MAX_RUN_8_LENGTH;
-                image_data_len +=
-                    writer.write(&[QOI_RUN_16 | (run >> 8) as u8, run as u8])?;
+                image_data_len += writer.write(&[QOI_RUN_16 | (run >> 8) as u8, run as u8])?;
             }
             run = 0;
         }
@@ -115,7 +114,9 @@ pub fn encode<W: Write + Seek>(
                 let within_small_diff = diff.into_iter().all(|v| v > -16 && v < 17);
 
                 if within_small_diff {
+                    // Use difference encoding
                     if va == 0 && vr > -2 && vr < 3 && vg > -2 && vg < 3 && vb > -2 && vb < 3 {
+                        // Use 2-bit difference encoding
                         image_data_len += writer.write(&[
                             QOI_DIFF_8 | (((vr + 1) << 4) | (vg + 1) << 2 | (vb + 1)) as u8
                         ])?;
@@ -127,11 +128,13 @@ pub fn encode<W: Write + Seek>(
                         && vb > -8
                         && vb < 9
                     {
+                        // Use 5 or 4-bit difference encoding
                         image_data_len += writer.write(&[
                             QOI_DIFF_16 | (vr + 15) as u8,
                             (((vg + 7) << 4) | (vb + 7)) as u8,
                         ])?;
                     } else {
+                        // Use 5-bit difference encoding
                         image_data_len += writer.write(&[
                             QOI_DIFF_24 | ((vr + 15) >> 1) as u8,
                             (((vr + 15) << 7) | ((vg + 15) << 2) | ((vb + 15) >> 3)) as u8,
@@ -139,6 +142,7 @@ pub fn encode<W: Write + Seek>(
                         ])?;
                     }
                 } else {
+                    // Encode an entire pixel (but only the differing components)
                     let gate = |v: i32, x: u8| if v != 0 { x } else { 0 };
 
                     image_data_len += writer.write(&[QOI_COLOR
@@ -166,8 +170,10 @@ pub fn encode<W: Write + Seek>(
         px_prev = px;
     }
 
+    // Padding
     image_data_len += writer.write(&[0; QOI_PADDING])?;
 
+    // Seek and write the length to the header
     encode_size(writer, image_data_len as u32, size_field_offset)
 }
 
