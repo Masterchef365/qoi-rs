@@ -1,4 +1,8 @@
-use std::{fs::File, io::{BufReader, BufWriter, Read, Result, Seek, SeekFrom, Write}, path::Path};
+use std::{
+    fs::File,
+    io::{BufReader, BufWriter, Read, Result, Seek, SeekFrom, Write},
+    path::Path,
+};
 
 type Rgba = [u8; 4];
 
@@ -18,9 +22,9 @@ const QOI_DIFF_16: u8 = 0b11000000; // 110xxxxx
 const QOI_DIFF_24: u8 = 0b11100000; // 1110xxxx
 const QOI_COLOR: u8 = 0b11110000; // 1111xxxx
 
-//const QOI_MASK_2: u8 = 0b11000000; // 11000000
-//const QOI_MASK_3: u8 = 0b11100000; // 11100000
-//const QOI_MASK_4: u8 = 0b11110000; // 11110000
+const QOI_MASK_2: u8 = 0b11000000; // 11000000
+const QOI_MASK_3: u8 = 0b11100000; // 11100000
+const QOI_MASK_4: u8 = 0b11110000; // 11110000
 
 pub fn write_to_file(
     path: impl AsRef<Path>,
@@ -241,6 +245,9 @@ fn decode_header<R: Read>(mut reader: R) -> Result<(u16, u16, u32)> {
     reader.read_exact(&mut short_buf)?;
     let height = u16::from_le_bytes(short_buf);
 
+    assert_ne!(width, 0);
+    assert_ne!(height, 0);
+
     // Read compressed size
     reader.read_exact(&mut long_buf)?;
 
@@ -250,12 +257,76 @@ fn decode_header<R: Read>(mut reader: R) -> Result<(u16, u16, u32)> {
 }
 
 /// Returns (image data, width, height)
-pub fn decode<R: Read>(
-    mut reader: R,
-    channels: ChannelCount,
-) -> Result<(Vec<u8>, u16, u16)> {
-    let (width, height, total_compressed_size) = decode_header(&mut reader)?;
-    dbg!(width, height, total_compressed_size);
+pub fn decode<R: Read>(mut reader: R, channels: ChannelCount) -> Result<(Vec<u8>, u16, u16)> {
+    let (width, height, _) = decode_header(&mut reader)?;
 
-    todo!()
+    let mut run: u32 = 0; // Run length encoding run length
+    let mut px = DEFAULT_PREV_PIXEL; // Previous pixel
+    let mut index = [[0; 4]; COLOR_LUT_SIZE];
+
+    let total_pixels = width as usize * height as usize;
+    let uncompressed_len = total_pixels * channels as usize; // Uncompressed image data length
+
+    let mut out_buf = Vec::with_capacity(uncompressed_len);
+
+    let mut read_byte = || -> Result<u8> {
+        let mut buf = [0u8];
+        reader.read_exact(&mut buf)?;
+        Ok(buf[0])
+    };
+
+    while out_buf.len() < uncompressed_len {
+        if run > 0 {
+            run -= 1;
+        } else {
+            let b1 = read_byte()?;
+
+            if (b1 & QOI_MASK_2) == QOI_INDEX {
+                px = index[(b1 ^ QOI_INDEX) as usize];
+            } else if (b1 & QOI_MASK_3) == QOI_RUN_8 {
+                run = (b1 & 0x1f) as u32;
+            } else if (b1 & QOI_MASK_3) == QOI_RUN_16 {
+                let b2 = read_byte()?;
+                run = ((((b1 & 0x1f) as u32) << 8) | (b2 as u32)) + 32;
+            } else if (b1 & QOI_MASK_2) == QOI_DIFF_8 {
+                px[0] += ((b1 >> 4) & 0x03) - 1;
+                px[1] += ((b1 >> 2) & 0x03) - 1;
+                px[2] += (b1 & 0x03) - 1;
+            } else if (b1 & QOI_MASK_3) == QOI_DIFF_16 {
+                let b2 = read_byte()?;
+                px[0] += (b1 & 0x1f) - 15;
+                px[1] += (b2 >> 4) - 7;
+                px[2] += (b2 & 0x0f) - 7;
+            } else if (b1 & QOI_MASK_4) == QOI_DIFF_24 {
+                let b2 = read_byte()?;
+                let b3 = read_byte()?;
+                px[0] += (((b1 & 0x0f) << 1) | (b2 >> 7)) - 15;
+                px[1] += ((b2 & 0x7c) >> 2) - 15;
+                px[2] += (((b2 & 0x03) << 3) | ((b3 & 0xe0) >> 5)) - 15;
+                px[3] += (b3 & 0x1f) - 15;
+            } else if (b1 & QOI_MASK_4) == QOI_COLOR {
+                if b1 & 8 != 0 {
+                    px[0] = read_byte()?;
+                }
+                if b1 & 4 != 0 {
+                    px[1] = read_byte()?;
+                }
+                if b1 & 2 != 0 {
+                    px[2] = read_byte()?;
+                }
+                if b1 & 1 != 0 {
+                    px[3] = read_byte()?;
+                }
+            }
+
+            index[(color_hash(px) % 64) as usize] = px;
+        }
+
+        match channels {
+            ChannelCount::Rgba => out_buf.extend_from_slice(&px),
+            ChannelCount::Rgb => out_buf.extend_from_slice(&px[..3]),
+        }
+    }
+
+    Ok((out_buf, width, height))
 }
