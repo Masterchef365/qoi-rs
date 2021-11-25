@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::{BufWriter, Result, Seek, SeekFrom, Write},
-    path::Path,
-};
+use std::{fs::File, io::{BufReader, BufWriter, Read, Result, Seek, SeekFrom, Write}, path::Path};
 
 type Rgba = [u8; 4];
 
@@ -11,6 +7,7 @@ const COLOR_LUT_SIZE: usize = 64;
 const DEFAULT_PREV_PIXEL: Rgba = [0, 0, 0, 0xFF];
 const MAX_RUN_LENGTH: u32 = 0x2020;
 const MAX_RUN_8_LENGTH: u32 = 33;
+const MAGIC: &[u8; 4] = b"qoif";
 
 const QOI_PADDING: usize = 4;
 const QOI_INDEX: u8 = 0b00000000; // 00xxxxxx
@@ -35,6 +32,15 @@ pub fn write_to_file(
     let mut writer = BufWriter::new(file);
     encode(&mut writer, data, width, channels)?;
     writer.flush()
+}
+
+pub fn read_from_file(
+    path: impl AsRef<Path>,
+    channels: ChannelCount,
+) -> Result<(Vec<u8>, u16, u16)> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    decode(reader, channels)
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -205,7 +211,7 @@ pub fn verify_and_calculate_dims(
 
 /// Returns the offset at which the file size will be written
 fn encode_header<W: Write + Seek>(mut writer: W, width: u16, height: u16) -> Result<u64> {
-    writer.write(b"qoif")?;
+    writer.write(MAGIC)?;
     writer.write(&width.to_le_bytes())?;
     writer.write(&height.to_le_bytes())?;
     let offset = writer.seek(SeekFrom::Current(0))?;
@@ -217,4 +223,39 @@ fn encode_size<W: Write + Seek>(mut writer: W, size: u32, offset: u64) -> Result
     writer.seek(SeekFrom::Start(offset))?;
     writer.write(&size.to_le_bytes())?;
     Ok(())
+}
+
+/// Returns (width, height, compressed data size) for the given reader
+fn decode_header<R: Read>(mut reader: R) -> Result<(u16, u16, u32)> {
+    let mut short_buf = [0u8; 2];
+    let mut long_buf = [0u8; 4];
+
+    // Check magic
+    reader.read_exact(&mut long_buf)?;
+    assert_eq!(&long_buf, MAGIC, "Missing magic number");
+
+    // Read width, height
+    reader.read_exact(&mut short_buf)?;
+    let width = u16::from_le_bytes(short_buf);
+
+    reader.read_exact(&mut short_buf)?;
+    let height = u16::from_le_bytes(short_buf);
+
+    // Read compressed size
+    reader.read_exact(&mut long_buf)?;
+
+    let compressed_data_len = u32::from_le_bytes(long_buf);
+
+    Ok((width, height, compressed_data_len))
+}
+
+/// Returns (image data, width, height)
+pub fn decode<R: Read>(
+    mut reader: R,
+    channels: ChannelCount,
+) -> Result<(Vec<u8>, u16, u16)> {
+    let (width, height, total_compressed_size) = decode_header(&mut reader)?;
+    dbg!(width, height, total_compressed_size);
+
+    todo!()
 }
